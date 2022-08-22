@@ -1,0 +1,278 @@
+---
+title: "PointPatternAnalysisDomestic"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+# tm_polygons(col=NA, alpha=0.5), maybe dont need color=NA
+library(spatstat)
+library(here)
+library(sp)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(tmap)
+library(sf)
+library(geojson)
+library(geojsonio)
+library(tmaptools)
+```
+
+```{r Load data}
+LondonBoroughs <- st_read(here::here("data", "ESRI",
+                                     "London_Borough_Excluding_MHW.shp"))
+
+library(stringr)
+Westminster <- LondonBoroughs %>%
+  dplyr::filter(., NAME=="Westminster")%>%
+  st_transform(., 27700)
+
+#have a look
+qtm(Westminster)
+
+gasyes <- st_read(here::here("data",
+                                  "gasyes.geojson")) %>%
+  st_transform(.,27700)
+summary(gasyes)
+
+#plot the EPCs on gas grid in Westminster
+#tmap_mode("view")
+tmap_mode("plot")
+#tmap mode set to plotting
+tm_shape(Westminster) +
+  tm_polygons(alpha = 0.5) +
+  tm_shape(gasyes) +
+  tm_dots(col = "#339999", size = 0.001)
+
+```
+
+```{r Data cleaning}
+
+library(tidyverse)
+library(sf)
+
+#this data might be multiple entries, So the first, fill out the distinct
+#use a distinct function remove duplicate
+gasyes <- gasyes %>% distinct(geometry, .keep_all=TRUE)
+
+
+#basically just cookie culturing it out of the Borough outline
+#dots right outside of Westminster
+gasyes <- gasyes[Westminster,]
+#check to see that they've been removed
+tmap_mode("plot")
+tm_shape(Westminster) +
+  tm_polygons(alpha = 0.5) +
+  tm_shape(gasyes) +
+  tm_dots(col = "#333333", size = 0.001)
+```
+
+
+
+```{r Study area}
+
+#now set a window as the borough boundary use (spatstat)
+window <- as.owin(Westminster)
+plot(window)
+
+#point pattern analysis, we need to create a point pattern (ppp) object
+#first, SF tp SP
+gasyes<- gasyes %>%
+  as(., 'Spatial')
+
+gasyes.ppp <- ppp(x=gasyes@coords[,1],
+                          y=gasyes@coords[,2],
+                          window=window)
+
+#Have a look at the new ppp object
+#col : color (code or name) to use for the points
+#cex : the size of pch symbols
+
+gasyes.ppp %>%
+  plot(.,pch=16,cex=0.1, 
+       main="Domestic buildings on gas grid in Westminster")
+```
+```{r OpenStreetMap}
+#-0.23326,51.54554
+#-0.09688,51.47846
+library(OpenStreetMap)
+
+basemap <- openmap(c(51.54554, -0.23326),  c(51.47846, -0.09688), type="osm", mergeTiles = TRUE)
+basemap <- openproj(basemap, projection = "+init=epsg:27700")
+
+plot(basemap)
+
+```
+
+
+```{r Point pattern analysis}
+#6.6.1 Kernel Density Estimation (hotspots)
+#density() function
+plot(basemap)
+gasyes.ppp %>%
+  density(., sigma=100) %>%
+  plot(col= add.alpha(brewer.pal(n = 9, name = "PuRd"),0.7), add=T) 
+
+
+#The sigma value sets the diameter of the Kernel
+#Try experimenting with different values of sigma to see how that affects the density estimate
+gasyes.ppp %>%
+  density(., sigma=150) %>%
+  plot()
+```
+
+## Quadrat Analysis
+
+```{r plot the points}
+#whether differs from ‘complete spatial randomness’ — CSR
+#The most basic test of CSR is a quadrat analysis
+#using the quadrat count function in spatstat
+
+#First plot the points
+plot(gasyes.ppp,
+     pch=16,
+     cex=0.1, 
+     main="Domestic buildings on gas in Westminster")
+
+#now count the points in that fall in a 6 x 6
+#grid overlaid across the windowBluePlaquesSub.ppp2<-BluePlaquesSub.ppp %>%
+gasyes.ppp %>%
+  quadratcount(.,nx = 30, ny = 30)%>%
+    plot(., add=F, col="red")
+```
+```{r}
+
+
+#run the quadrat count
+Qcount <- gasyes.ppp %>%
+  quadratcount(.,nx = 30, ny = 30) %>%
+  as.data.frame() %>%
+  dplyr::count(Var1=Freq)%>%
+  dplyr::rename(Freqquadratcount=n)
+
+Qcount %>% 
+  summarise_all(class)
+
+sums <- Qcount %>%
+  #calculate the total blue plaques (Var * Freq)
+  mutate(total = Var1 * Freqquadratcount) %>%
+  dplyr::summarise(across(everything(), sum))%>%
+  dplyr::select(-Var1) 
+
+lambda<- Qcount%>%
+  #calculate lambda
+  mutate(total = Var1 * Freqquadratcount)%>%
+  dplyr::summarise(across(everything(), sum)) %>%
+  mutate(lambda=total/Freqquadratcount) %>%
+  dplyr::select(lambda)%>%
+  pull(lambda)
+
+QCountTable <- Qcount %>%
+  mutate(Pr=((lambda^Var1)*exp(-lambda))/factorial(Var1))%>%
+  #now calculate the expected counts based on our total number of plaques
+  #and save them to the table
+  mutate(Expected= (Pr * sums$Freqquadratcount))
+
+#Compare the frequency distributions of the observed and expected point patterns
+plot(c(1,200),c(0,20), type="n",
+xlab="Number of buildings on gas grid (Red=Observed,Blue=Expected)", 
+     ylab="Frequency of Occurances")
+points(QCountTable$Freqquadratcount, 
+       col="Red", 
+       type="o")
+points(QCountTable$Expected, col="Blue", 
+       type="o")
+
+```
+```{r}
+
+teststats <- quadrat.test(gasyes.ppp, nx = 30, ny = 30)
+teststats
+
+```
+
+
+```{r raster}
+
+library(raster)
+r <- raster(Westminster)
+res(r) <- 150
+r
+
+r <- rasterize(Westminster, r)
+plot(r, col='#FFFFFF')
+quads <- as(r, 'SpatialPolygons')
+plot(quads, add=TRUE)
+points(gasyes, col='#660033', cex=0.01)
+
+```
+```{r}
+
+nc <- rasterize(coordinates(gasyes), r, fun='count', background=0)
+plot(nc)
+plot(window, alpha=0.1, add=TRUE)
+
+```
+
+
+```{r}
+ncmeters <- mask(nc, r)
+#plot(ncmeters)
+#plot(window, add=TRUE)
+
+f <- freq(ncmeters, useNA='no')
+head(f)
+##      value count
+## [1,]     0    48
+## [2,]     1    29
+## [3,]     2    24
+## [4,]     3    22
+## [5,]     4    19
+## [6,]     5    16
+plot(f, pch=20)
+
+```
+
+```{r}
+
+# number of quadrats
+quadrats <- sum(f[,2])
+# number of cases
+cases <- sum(f[,1] * f[,2])
+mu <- cases / quadrats
+mu
+
+ff <- data.frame(f)
+colnames(ff) <- c('K', 'X')
+ff$Kmu <- ff$K - mu
+ff$Kmu2 <- ff$Kmu^2
+ff$XKmu2 <- ff$Kmu2 * ff$X
+head(ff)
+
+s2 <- sum(ff$XKmu2) / (sum(ff$X)-1)
+s2
+
+VMR <- s2 / mu
+VMR
+```
+
+
+
+
+```{r}
+# Ripley’s K: spatstat package using the kest() function.
+K <- gasyes.ppp %>%
+  Kest(., correction="good", rmax=1500) %>%
+  plot()
+
+kf100 <- envelope(gasyes.ppp, Kest, nsim=99, correction="good", nrank=2, rmax=1500)
+plot(kf1000)
+                      
+#pfun1 <- envelope(gasyes.ppp, pcf, nsim=99, nrank=3, correction="good")
+#plot(pfun1)
+
+#PCF <- pcfinhom(gasyes.ppp) 
+#plot(PCF)
+
+```
+

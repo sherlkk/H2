@@ -1,0 +1,419 @@
+---
+title: "readshape"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(here)
+library(janitor)
+library(dplyr)
+library(tidyverse)
+library(spatstat)
+library(sp)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(tmap)
+library(sf)
+library(geojson)
+library(geojsonio)
+library(tmaptools)
+library(RColorBrewer)
+
+```
+
+```{r}
+
+westminster <- st_read(here::here("data", "lsoa_westminster.gpkg"))%>%
+  st_transform(.,27700) %>% 
+  clean_names()
+
+```
+
+```{r}
+
+gasdomcon <- read_csv(here::here("data", "gas_lsoa_2019.csv"), locale = locale(encoding = "latin1")) %>% 
+  clean_names()
+
+
+gasmerged <- westminster %>% 
+  left_join(gasdomcon, 
+            by = c("lsoa11cd" = "lsoa_code")) %>%
+  dplyr::select(lsoa11cd, popden, hholds, avhholdsz, number_of_meters, total_consumption_k_wh,
+                mean_consumption_k_wh_per_meter, median_consumption_k_wh_per_meter, number_of_non_consuming_meters)
+st_crs(gasmerged)
+```
+
+```{r}
+
+plot(gasmerged$number_of_meters) # this is a numeric vector!
+plot(gasmerged["number_of_meters"])
+
+hist(gasmerged$total_consumption_k_wh)
+plot(gasmerged["total_consumption_k_wh"])
+     #col=brewer.pal(n = 9, name = "BuPu")
+
+hist(gasmerged$mean_consumption_k_wh_per_meter)
+plot(gasmerged["mean_consumption_k_wh_per_meter"])
+
+ 
+```
+
+
+```{r}
+
+gasdomden <- gasmerged %>%
+  #calculate area
+  mutate(area=st_area(.))%>%
+  #then density per lsoa
+  mutate(meters_density = number_of_meters/area)%>%
+  mutate(con_density = total_consumption_k_wh/area)
+
+
+```
+
+
+
+```{r}
+
+hist(gasdomden$meters_density)
+plot(gasdomden["meters_density"], 
+     main = "gas meters density")
+
+hist(gasdomden$con_density)
+plot(gasdomden["con_density"], 
+     main = "consumption density")
+
+```
+
+```{r}
+
+tmap_mode("plot")
+tm_shape(gasdomden) +
+    tm_polygons("meters_density",
+        style="jenks",
+        palette="BuPu",
+        midpoint=NA,
+        popup.vars=c("lsoa11cd", "meters_density", "con_density"),
+        title="meters_density")
+
+tm_shape(gasdomden) +
+    tm_polygons("con_density",
+        style="jenks",
+        palette="BuPu",
+        midpoint=NA,
+        popup.vars=c("lsoa11cd", "meters_density", "con_density"),
+        title="con_density")
+
+```
+
+
+```{r red link}
+
+library(spdep)
+
+#First calculate the centroids of all Wards in London
+
+coordsW <- gasdomden %>%
+  st_centroid()%>%
+  st_geometry()
+  
+plot(coordsW,axes=TRUE)
+
+#create a neighbours list
+#snap = 0.0001
+L_nb <- gasdomden %>%
+  poly2nb(., queen=T, snap = 0.0001)
+
+summary(L_nb)
+
+#plot them
+plot(gasdomden$geom)
+plot(L_nb, st_geometry(coordsW), col="red", add=T)
+#add a map underneath
+
+
+L.lw <- L_nb %>%
+  nb2mat(., style="W")
+
+sum(L.lw)
+
+sum(L.lw[,1])
+
+```
+
+
+```{r many links}
+
+overlapmat = st_overlaps(gasdomden,sparse=FALSE)
+ovnb = mat2listw(overlapmat)
+
+L_nb_rock <- gasdomden %>%
+  poly2nb(., queen=F, snap = 0.0001)
+
+plot(gasdomden$geom)
+plot(L_nb, st_geometry(coordsW), col="red", add=T)
+plot(L_nb_rock, st_geometry(coordsW), col="blue", add=T)
+#plot(gasdomden$geom)
+plot(ovnb, st_geometry(coordsW), col="green", add=T)
+#add a map underneath
+
+```
+
+
+
+```{r}
+
+L.lw <- L_nb %>%
+  nb2listw(., style="C")
+
+I_Global_conDensity <- gasdomden %>%
+  pull(con_density) %>%
+  as.vector()%>%
+  moran.test(., L.lw)
+
+I_Global_conDensity
+
+C_Global_conDensity <- 
+  gasdomden %>%
+  pull(con_density) %>%
+  as.vector()%>%
+  geary.test(., L.lw)
+
+C_Global_conDensity
+
+G_Global_conDensity <- 
+  gasdomden %>%
+  pull(con_density) %>%
+  as.vector()%>%
+  globalG.test(., L.lw)
+
+G_Global_conDensity
+
+```
+
+```{r}
+
+I_Global_meDensity <- gasdomden %>%
+  pull(meters_density) %>%
+  as.vector()%>%
+  moran.test(., L.lw)
+
+I_Global_meDensity
+
+C_Global_meDensity <- 
+  gasdomden %>%
+  pull(meters_density) %>%
+  as.vector()%>%
+  geary.test(., L.lw)
+
+C_Global_meDensity
+
+G_Global_meDensity <- 
+  gasdomden %>%
+  pull(meters_density) %>%
+  as.vector()%>%
+  globalG.test(., L.lw)
+
+G_Global_meDensity
+
+```
+
+```{r}
+
+moran <- moran.plot(gasdomden$con_density%>%
+  as.vector(), listw = nb2listw(L_nb, style="W"))
+
+```
+
+
+```{r meters count/meters density}
+
+#use the localmoran function to generate I for each ward in the city
+
+I_Local_meCount <- gasdomden %>%
+  pull(number_of_meters) %>%
+  as.vector()%>%
+  localmoran(., L.lw)%>%
+  as_tibble()
+
+I_Local_meDensity <- gasdomden %>%
+  pull(meters_density) %>%
+  as.vector()%>%
+  localmoran(., L.lw)%>%
+  as_tibble()
+
+I_Local_conDensity <- gasdomden %>%
+  pull(con_density) %>%
+  as.vector()%>%
+  localmoran(., L.lw)%>%
+  as_tibble()
+
+#what does the output (the localMoran object) look like?
+slice_head(I_Local_meDensity, n=5)
+
+gasdomden <- gasdomden %>%
+  mutate(meDensity_I =as.numeric(I_Local_meDensity$Ii))%>%
+  mutate(meDensity_Iz =as.numeric(I_Local_meDensity$Z.Ii))%>%
+  mutate(conDensity_I =as.numeric(I_Local_conDensity$Ii))%>%
+  mutate(conDensity_Iz =as.numeric(I_Local_conDensity$Z.Ii))
+
+```
+
+```{r plot meters count I/Iz}
+
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+
+MoranColours<- rev(brewer.pal(8, "PRGn"))
+
+tm_shape(gasdomden) +
+    tm_polygons("conDensity_I",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's I, Gas consumption density")
+
+tm_shape(gasdomden) +
+    tm_polygons("conDensity_Iz",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's Iz, Gas consumption density")
+
+```
+
+```{r Gi meters/consumption}
+
+Gi_Local_meDensity <- gasdomden %>%
+  pull(meters_density) %>%
+  as.vector()%>%
+  localG(., L.lw)
+
+head(Gi_Local_meDensity)
+
+gasdomden <- gasdomden %>%
+  mutate(meDensity_G = as.numeric(Gi_Local_meDensity))
+
+GIColours<- rev(brewer.pal(8, "PiYG"))
+
+#now plot on an interactive map
+tm_shape(gasdomden) +
+    tm_polygons("meDensity_G",
+        style="fixed",
+        breaks=breaks1,
+        palette=GIColours,
+        midpoint=NA,
+        title="Gi*, Gas meters density in London")
+
+
+Gi_Local_conDensity <- gasdomden %>%
+  pull(con_density) %>%
+  as.vector()%>%
+  localG(., L.lw)
+
+head(Gi_Local_conDensity)
+
+gasdomden <- gasdomden %>%
+  mutate(conDensity_G = as.numeric(Gi_Local_conDensity))
+
+GIColours0<- rev(brewer.pal(10, "RdBu"))
+#now plot on an interactive map
+tm_shape(gasdomden) +
+    tm_polygons("conDensity_G",
+        style="fixed",
+        breaks=breaks1,
+        palette=GIColours0,
+        midpoint=NA,
+        title="Gi*, Gas consumption density in London")
+
+```
+
+```{r orange and green}
+
+local <- localmoran(x = gasdomden$con_density%>%
+  as.vector(), listw = nb2listw(L_nb, style="W"))
+
+L.lww <- L_nb %>%
+  nb2listw(., style="W")
+
+I_Local_conDen <- gasdomden %>%
+     pull(con_density) %>%
+     as.vector()%>%
+     localmoran(., L.lww)%>%
+     as_tibble()
+
+
+# binds results to our polygon shapefile
+moran.map <- cbind(gasdomden, local)
+
+tm_shape(moran.map) +
+  tm_fill(col = "Ii",
+          style = "quantile",
+          title = "local moran statistic") 
+
+```
+```{r HH/LL}
+#gasdomden$con_density%>%as.vector()
+
+quadrant <- vector(mode="numeric",length=nrow(local))
+
+# centers the variable of interest around its mean
+m.con <- gasdomden$con_density%>%as.vector() - mean(gasdomden$con_density%>%as.vector())     
+
+# centers the local Moran's around the mean
+m.local <- local[,1] - mean(local[,1])    
+
+# significance threshold
+signif <- 0.05 
+
+# builds a data quadrant
+quadrant[m.con >0 & m.local>0] <- 4  
+quadrant[m.con <0 & m.local<0] <- 1      
+quadrant[m.con <0 & m.local>0] <- 2
+quadrant[m.con >0 & m.local<0] <- 3
+quadrant[local[,5]>signif] <- 0   
+
+# plot in r
+brks <- c(0,1,2,3,4)
+colors <- c("white","blue",rgb(0,0,1,alpha=0.4),rgb(1,0,0,alpha=0.4),"red")
+plot(gasdomden[13], border="lightgray",col=colors[findInterval(quadrant,brks,all.inside=FALSE)])
+
+legend("bottomleft", legend = c("insignificant","low-low","low-high","high-low","high-high"),
+       fill=colors,bty="n")
+
+```
+
+```{r}
+nb <- dnearneigh(st_geometry(coordsW), 0, 800)
+nb_lw <- nb2listw(nb, style = 'W')
+
+plot(gasdomden$geom)
+plot(nb, st_geometry(coordsW), add=TRUE, col = 'red')
+
+
+local_g <- localG(gasdomden$con_density%>%as.vector(), nb_lw)
+local_g <- cbind(gasdomden, as.matrix(local_g))
+names(local_g)[19] <- "gstat"
+
+Suki<- rev(brewer.pal(9, "RdBu"))
+tm_shape(local_g) + 
+  tm_fill("gstat", 
+          palette = Suki,
+          midpoint=NA,
+          breaks=breaks1,
+          ) +
+  tm_borders(alpha=.2)
+
+tm_shape(local_g) +
+    tm_polygons("gstat",
+        style="fixed",
+        breaks=breaks1,
+        palette=Suki,
+        midpoint=NA,
+        title="Gi*, Gas consumption density in London")
+
+```
+

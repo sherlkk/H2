@@ -1,0 +1,456 @@
+---
+title: "readshape"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(here)
+library(janitor)
+library(dplyr)
+library(tidyverse)
+library(spatstat)
+library(sp)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(tmap)
+library(sf)
+library(geojson)
+library(geojsonio)
+library(tmaptools)
+library(RColorBrewer)
+
+```
+
+```{r}
+
+westminster <- st_read(here::here("data", "westminster_msoa.gpkg"))%>%
+  st_transform(.,27700) %>% 
+  clean_names()
+
+```
+
+```{r}
+
+msoameters <- read_csv(here::here("data", "msoameters.csv"), locale = locale(encoding = "latin1")) %>% 
+  clean_names()
+
+memerged <- westminster %>% 
+  left_join(msoameters, 
+            by = c("msoa_code" = "msoa_code")) %>%
+  dplyr::select(msoa_code, area_km2, x2010, x2011, x2012, x2013, x2014, x2015, x2016, x2017, x2018, x2019, x2020)
+
+memerged$x2010 <- memerged$x2010 / memerged$area_km2
+memerged$x2011 <- memerged$x2011 / memerged$area_km2
+memerged$x2012 <- memerged$x2012 / memerged$area_km2
+memerged$x2013 <- memerged$x2013 / memerged$area_km2
+memerged$x2014 <- memerged$x2014 / memerged$area_km2
+memerged$x2015 <- memerged$x2015 / memerged$area_km2
+memerged$x2016 <- memerged$x2016 / memerged$area_km2
+memerged$x2017 <- memerged$x2017 / memerged$area_km2
+memerged$x2018 <- memerged$x2018 / memerged$area_km2
+memerged$x2019 <- memerged$x2019 / memerged$area_km2
+memerged$x2020 <- memerged$x2020 / memerged$area_km2
+
+```
+
+
+
+
+```{r}
+
+
+msoacontotal <- read_csv(here::here("data", "msoacontotal.csv"), locale = locale(encoding = "latin1")) %>% 
+  clean_names()
+contmerged <- westminster %>% 
+  left_join(msoacontotal, 
+            by = c("msoa_code" = "msoa_code")) %>%
+  dplyr::select(msoa_code, area_km2, x2010, x2011, x2012, x2013, x2014, x2015, x2016, x2017, x2018, x2019, x2020)
+
+contmerged$x2010 <- contmerged$x2010 / contmerged$area_km2 / 10^6
+contmerged$x2011 <- contmerged$x2011 / contmerged$area_km2 / 10^6
+contmerged$x2012 <- contmerged$x2012 / contmerged$area_km2 / 10^6
+contmerged$x2013 <- contmerged$x2013 / contmerged$area_km2 / 10^6
+contmerged$x2014 <- contmerged$x2014 / contmerged$area_km2 / 10^6
+contmerged$x2015 <- contmerged$x2015 / contmerged$area_km2 / 10^6
+contmerged$x2016 <- contmerged$x2016 / contmerged$area_km2 / 10^6
+contmerged$x2017 <- contmerged$x2017 / contmerged$area_km2 / 10^6
+contmerged$x2018 <- contmerged$x2018 / contmerged$area_km2 / 10^6
+contmerged$x2019 <- contmerged$x2019 / contmerged$area_km2 / 10^6
+contmerged$x2020 <- contmerged$x2020 / contmerged$area_km2 / 10^6
+
+```
+
+
+
+```{r}
+
+# make some bbox magic
+bbox_new <- st_bbox(memerged) # current bounding box
+
+xrange <- bbox_new$xmax - bbox_new$xmin # range of x values
+yrange <- bbox_new$ymax - bbox_new$ymin # range of y values
+
+# bbox_new[1] <- bbox_new[1] - (0.25 * xrange) # xmin - left
+ bbox_new[3] <- bbox_new[3] + (0.4 * xrange) # xmax - right
+# bbox_new[2] <- bbox_new[2] - (0.25 * yrange) # ymin - bottom
+bbox_new[4] <- bbox_new[4] + (0.2 * yrange) # ymax - top
+
+bbox_new <- bbox_new %>%  # take the bounding box ...
+  st_as_sfc() # ... and make it a sf polygon
+
+plot(memerged[4])
+
+tm_shape(memerged, bbox = bbox_new) +
+    tm_polygons("x2010",
+        palette="PuRd",
+        breaks=seq(from= 30, to=650, by=30),
+        midpoint=NA,
+        title="Meters density")
+
+
+ 
+```
+
+
+```{r}
+
+tm_shape(memerged) +
+    tm_polygons(c("x2010","x2011", "x2012", "x2013", "x2014", "x2015", "x2016", "x2017", "x2018", "x2019", "x2020"),
+        palette="PuRd",
+        breaks=seq(from= 30, to=650, by=30),
+        midpoint=NA,
+        title="Meters density",
+        legend.show = FALSE)
+
+
+```
+
+
+
+```{r}
+
+plot(contmerged[4])
+
+tm_shape(contmerged, bbox = bbox_new) +
+    tm_polygons("x2019",
+        palette="BuPu",
+        
+        midpoint=NA,
+        title="Consumption density")
+#breaks=seq(from= 10, to=270, by=10),
+```
+
+```{r}
+
+tm_shape(contmerged) +
+    tm_polygons(c("x2010","x2011", "x2012", "x2013", "x2014", "x2015", "x2016", "x2017", "x2018", "x2019", "x2020"),
+        palette="BuPu",
+        breaks=seq(from= 0, to=270, by=10),
+        midpoint=NA,
+        title="Consumption density",
+        legend.show = FALSE)
+
+```
+
+```{r}
+
+msoamean <- read_csv(here::here("data", "msoaconmean.csv"), locale = locale(encoding = "latin1")) %>% 
+  clean_names()
+
+meanmerged <- westminster %>% 
+  left_join(msoamean, 
+            by = c("msoa_code" = "msoa_code")) %>%
+  dplyr::select(msoa_code, area_km2, x2010, x2011, x2012, x2013, x2014, x2015, x2016, x2017, x2018, x2019, x2020)
+
+meanmerged$x2010 <- meanmerged$x2010 / 10^3
+meanmerged$x2011 <- meanmerged$x2011 / 10^3
+meanmerged$x2012 <- meanmerged$x2012 / 10^3
+meanmerged$x2013 <- meanmerged$x2013 / 10^3
+meanmerged$x2014 <- meanmerged$x2014 / 10^3
+meanmerged$x2015 <- meanmerged$x2015 / 10^3
+meanmerged$x2016 <- meanmerged$x2016 / 10^3
+meanmerged$x2017 <- meanmerged$x2017 / 10^3
+meanmerged$x2018 <- meanmerged$x2018 / 10^3
+meanmerged$x2019 <- meanmerged$x2019 / 10^3
+meanmerged$x2020 <- meanmerged$x2020 / 10^3
+
+
+```
+
+
+```{r}
+
+plot(meanmerged[4])
+
+tm_shape(meanmerged, bbox = bbox_new) +
+    tm_polygons("x2010",
+        palette="RdPu",
+        breaks=seq(from= 100, to=2000, by=100),
+        midpoint=NA,
+        title="Consumption density")
+
+```
+```{r}
+tm_shape(meanmerged) +
+    tm_polygons(c("x2010","x2011", "x2012", "x2013", "x2014", "x2015", "x2016", "x2017", "x2018", "x2019", "x2020"),
+        palette="RdPu",
+        breaks=seq(from= 100, to=1600, by=100),
+        midpoint=NA,
+        title="Consumption density",
+        legend.show = FALSE)
+```
+
+
+```{r red link}
+
+library(spdep)
+
+#First calculate the centroids of all Wards in London
+
+coordsW <- contmerged %>%
+  st_centroid()%>%
+  st_geometry()
+  
+plot(coordsW,axes=TRUE)
+
+#create a neighbours list
+#snap = 0.0001
+L_nb <- contmerged %>%
+  poly2nb(., queen=T, snap = 0.0001)
+
+summary(L_nb)
+
+#plot them
+plot(contmerged$geom)
+plot(L_nb, st_geometry(coordsW), col="red", add=T)
+#add a map underneath
+
+
+L.lw <- L_nb %>%
+  nb2mat(., style="W")
+
+sum(L.lw)
+
+sum(L.lw[,1])
+
+```
+
+
+```{r many links}
+
+overlapmat = st_overlaps(contmerged,sparse=FALSE)
+ovnb = mat2listw(overlapmat)
+
+L_nb_rock <- contmerged %>%
+  poly2nb(., queen=F, snap = 0.0001)
+
+plot(contmerged$geom)
+plot(L_nb, st_geometry(coordsW), col="red", add=T)
+plot(L_nb_rock, st_geometry(coordsW), col="blue", add=T)
+#plot(contmerged$geom)
+plot(ovnb, st_geometry(coordsW), col="green", add=T)
+#add a map underneath
+
+```
+
+
+
+```{r}
+
+L.lw <- L_nb %>%
+  nb2listw(., style="W")
+
+I_Global_conDensity <- contmerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  moran.test(., L.lw)
+
+I_Global_conDensity
+
+C_Global_conDensity <- 
+  contmerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  geary.test(., L.lw)
+
+C_Global_conDensity
+
+G_Global_conDensity <- 
+  contmerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  globalG.test(., L.lw)
+
+G_Global_conDensity
+
+```
+
+
+```{r}
+
+moran <- moran.plot(contmerged$x2019%>%
+  as.vector(), listw = nb2listw(L_nb, style="W"))
+
+```
+
+
+```{r meters count/meters density}
+
+#use the localmoran function to generate I for each ward in the city
+
+I_Local_conDensity <- contmerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  localmoran(., L.lw)%>%
+  as_tibble()
+
+#what does the output (the localMoran object) look like?
+slice_head(I_Local_conDensity, n=5)
+
+contmerged <- contmerged %>%
+  mutate(conDensity_I =as.numeric(I_Local_conDensity$Ii))%>%
+  mutate(conDensity_Iz =as.numeric(I_Local_conDensity$Z.Ii))
+
+```
+
+```{r plot meters count I/Iz}
+
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+
+MoranColours<- rev(brewer.pal(8, "PRGn"))
+
+tm_shape(contmerged) +
+    tm_polygons("conDensity_I",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's I, Gas consumption density")
+
+tm_shape(contmerged) +
+    tm_polygons("conDensity_Iz",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's Iz, Gas consumption density")
+
+```
+
+
+
+```{r Gi meters/consumption}
+
+Gi_Local_conDensity <- contmerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  localG(., L.lw)
+
+head(Gi_Local_conDensity)
+
+contmerged <- contmerged %>%
+  mutate(conDensity_G = as.numeric(Gi_Local_conDensity))
+
+GIColours0<- rev(brewer.pal(10, "RdBu"))
+#now plot on an interactive map
+tm_shape(contmerged) +
+    tm_polygons("conDensity_G",
+        style="fixed",
+        breaks=breaks1,
+        palette=GIColours0,
+        midpoint=NA,
+        title="Gi*, Gas consumption density in London")
+
+```
+
+
+```{r orange and green}
+
+local <- localmoran(x = contmerged$x2019%>%
+  as.vector(), listw = nb2listw(L_nb, style="W"))
+
+L.lww <- L_nb %>%
+  nb2listw(., style="W")
+
+I_Local_conDen <- contmerged %>%
+     pull(x2019) %>%
+     as.vector()%>%
+     localmoran(., L.lww)%>%
+     as_tibble()
+
+
+# binds results to our polygon shapefile
+moran.map <- cbind(contmerged, local)
+
+tm_shape(moran.map) +
+  tm_fill(col = "Ii",
+          style = "quantile",
+          title = "local moran statistic") 
+
+```
+
+
+```{r HH/LL}
+#contmerged$x2019%>%as.vector()
+
+quadrant <- vector(mode="numeric",length=nrow(local))
+
+# centers the variable of interest around its mean
+m.con <- contmerged$x2019%>%as.vector() - mean(contmerged$x2019%>%as.vector())     
+
+# centers the local Moran's around the mean
+m.local <- local[,1] - mean(local[,1])    
+
+# significance threshold
+signif <- 0.05 
+
+# builds a data quadrant
+quadrant[m.con >0 & m.local>0] <- 4  
+quadrant[m.con <0 & m.local<0] <- 1      
+quadrant[m.con <0 & m.local>0] <- 2
+quadrant[m.con >0 & m.local<0] <- 3
+quadrant[local[,5]>signif] <- 0   
+
+# plot in r
+brks <- c(0,1,2,3,4)
+colors <- c("white","blue",rgb(0,0,1,alpha=0.4),rgb(1,0,0,alpha=0.4),"red")
+plot(contmerged[13], border="lightgray",col=colors[findInterval(quadrant,brks,all.inside=FALSE)])
+
+legend("bottomleft", legend = c("insignificant","low-low","low-high","high-low","high-high"),
+       fill=colors,bty="n")
+
+```
+
+```{r}
+nb <- dnearneigh(st_geometry(coordsW), 0, 1350)
+nb_lw <- nb2listw(nb, style = 'W')
+
+plot(contmerged$geom)
+plot(nb, st_geometry(coordsW), add=TRUE, col = 'red')
+
+
+local_g <- localG(contmerged$x2019%>%as.vector(), nb_lw)
+local_g <- cbind(contmerged, as.matrix(local_g))
+names(local_g)[17] <- "gstat"
+
+Suki<- rev(brewer.pal(9, "RdBu"))
+tm_shape(local_g) + 
+  tm_fill("gstat", 
+          palette = Suki,
+          breaks=breaks1,
+          style = "pretty") +
+  tm_borders(alpha=.4)
+
+
+tm_shape(local_g) + 
+  tm_fill("gstat", 
+          palette = Suki,
+          midpoint=NA,
+          breaks=breaks1,
+          ) +
+  tm_borders(alpha=.2)
+
+```
+

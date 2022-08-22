@@ -1,0 +1,344 @@
+---
+title: "readshape"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(here)
+library(janitor)
+library(dplyr)
+library(tidyverse)
+library(spatstat)
+library(sp)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(tmap)
+library(sf)
+library(geojson)
+library(geojsonio)
+library(tmaptools)
+library(RColorBrewer)
+
+```
+
+```{r}
+
+westminster <- st_read(here::here("data", "westminster_msoa.gpkg"))%>%
+  st_transform(.,27700) %>% 
+  clean_names()
+
+```
+
+```{r}
+
+msoameters <- read_csv(here::here("data", "msoameters.csv"), locale = locale(encoding = "latin1")) %>% 
+  clean_names()
+
+memerged <- westminster %>% 
+  left_join(msoameters, 
+            by = c("msoa_code" = "msoa_code")) %>%
+  dplyr::select(msoa_code, area_km2, x2010, x2011, x2012, x2013, x2014, x2015, x2016, x2017, x2018, x2019, x2020)
+
+memerged$x2010 <- memerged$x2010 / memerged$area_km2
+memerged$x2011 <- memerged$x2011 / memerged$area_km2
+memerged$x2012 <- memerged$x2012 / memerged$area_km2
+memerged$x2013 <- memerged$x2013 / memerged$area_km2
+memerged$x2014 <- memerged$x2014 / memerged$area_km2
+memerged$x2015 <- memerged$x2015 / memerged$area_km2
+memerged$x2016 <- memerged$x2016 / memerged$area_km2
+memerged$x2017 <- memerged$x2017 / memerged$area_km2
+memerged$x2018 <- memerged$x2018 / memerged$area_km2
+memerged$x2019 <- memerged$x2019 / memerged$area_km2
+memerged$x2020 <- memerged$x2020 / memerged$area_km2
+
+```
+
+
+
+```{r}
+
+# make some bbox magic
+bbox_new <- st_bbox(memerged) # current bounding box
+
+xrange <- bbox_new$xmax - bbox_new$xmin # range of x values
+yrange <- bbox_new$ymax - bbox_new$ymin # range of y values
+
+# bbox_new[1] <- bbox_new[1] - (0.25 * xrange) # xmin - left
+ bbox_new[3] <- bbox_new[3] + (0.4 * xrange) # xmax - right
+# bbox_new[2] <- bbox_new[2] - (0.25 * yrange) # ymin - bottom
+bbox_new[4] <- bbox_new[4] + (0.2 * yrange) # ymax - top
+
+bbox_new <- bbox_new %>%  # take the bounding box ...
+  st_as_sfc() # ... and make it a sf polygon
+
+plot(memerged[4])
+
+tm_shape(memerged, bbox = bbox_new) +
+    tm_polygons("x2010",
+        palette="PuRd",
+        breaks=seq(from= 30, to=650, by=30),
+        midpoint=NA,
+        title="Meters density")
+
+```
+
+
+```{r}
+
+tm_shape(memerged) +
+    tm_polygons(c("x2010","x2011", "x2012", "x2013", "x2014", "x2015", "x2016", "x2017", "x2018", "x2019", "x2020"),
+        palette="PuRd",
+        breaks=seq(from= 30, to=650, by=30),
+        midpoint=NA,
+        title="Meters density",
+        legend.show = FALSE)
+
+
+```
+
+
+
+```{r red link}
+
+library(spdep)
+
+#First calculate the centroids of all Wards in London
+
+coordsW <- memerged %>%
+  st_centroid()%>%
+  st_geometry()
+  
+plot(coordsW,axes=TRUE)
+
+#create a neighbours list
+#snap = 0.0001
+L_nb <- memerged %>%
+  poly2nb(., queen=T, snap = 0.0001)
+
+summary(L_nb)
+
+#plot them
+plot(memerged$geom)
+plot(L_nb, st_geometry(coordsW), col="red", add=T)
+#add a map underneath
+
+
+L.lw <- L_nb %>%
+  nb2mat(., style="B")
+
+sum(L.lw)
+
+sum(L.lw[,1])
+
+```
+
+
+```{r many links}
+
+overlapmat = st_overlaps(memerged,sparse=FALSE)
+ovnb = mat2listw(overlapmat)
+
+L_nb_rock <- memerged %>%
+  poly2nb(., queen=F, snap = 0.0001)
+
+plot(memerged$geom)
+plot(L_nb, st_geometry(coordsW), col="red", add=T)
+plot(L_nb_rock, st_geometry(coordsW), col="blue", add=T)
+#plot(memerged$geom)
+plot(ovnb, st_geometry(coordsW), col="green", add=T)
+#add a map underneath
+
+```
+
+
+
+```{r}
+
+L.lw <- L_nb %>%
+  nb2listw(., style="C")
+
+I_Global_meDensity <- memerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  moran.test(., L.lw)
+
+I_Global_meDensity
+
+C_Global_meDensity <- 
+  memerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  geary.test(., L.lw)
+
+C_Global_meDensity
+
+G_Global_meDensity <- 
+  memerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  globalG.test(., L.lw)
+
+G_Global_meDensity
+
+```
+
+
+```{r}
+
+moran <- moran.plot(memerged$x2019%>%
+  as.vector(), listw = nb2listw(L_nb, style="W"))
+
+```
+
+
+```{r meters count/meters density}
+
+#use the localmoran function to generate I for each ward in the city
+
+I_Local_meDensity <- memerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  localmoran(., L.lw)%>%
+  as_tibble()
+
+#what does the output (the localMoran object) look like?
+slice_head(I_Local_meDensity, n=5)
+
+memerged <- memerged %>%
+  mutate(meDensity_I =as.numeric(I_Local_meDensity$Ii))%>%
+  mutate(meDensity_Iz =as.numeric(I_Local_meDensity$Z.Ii))
+
+```
+
+```{r plot meters count I/Iz}
+
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+
+MoranColours<- rev(brewer.pal(8, "PRGn"))
+
+tm_shape(memerged) +
+    tm_polygons("meDensity_I",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's I, Gas mesumption density")
+
+tm_shape(memerged) +
+    tm_polygons("meDensity_Iz",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's Iz, Gas mesumption density")
+
+```
+
+
+
+```{r Gi meters/mesumption}
+
+Gi_Local_meDensity <- memerged %>%
+  pull(x2019) %>%
+  as.vector()%>%
+  localG(., L.lw)
+
+head(Gi_Local_meDensity)
+
+memerged <- memerged %>%
+  mutate(meDensity_G = as.numeric(Gi_Local_meDensity))
+
+GIColours0<- rev(brewer.pal(10, "RdBu"))
+#now plot on an interactive map
+tm_shape(memerged) +
+    tm_polygons("meDensity_G",
+        style="fixed",
+        breaks=breaks1,
+        palette=GIColours0,
+        midpoint=NA,
+        title="Gi*, Gas mesumption density in London")
+
+```
+
+
+```{r orange and green}
+
+local <- localmoran(x = memerged$x2019%>%
+  as.vector(), listw = nb2listw(L_nb, style="W"))
+
+L.lww <- L_nb %>%
+  nb2listw(., style="W")
+
+I_Local_meDen <- memerged %>%
+     pull(x2019) %>%
+     as.vector()%>%
+     localmoran(., L.lww)%>%
+     as_tibble()
+
+
+# binds results to our polygon shapefile
+moran.map <- cbind(memerged, local)
+
+tm_shape(moran.map) +
+  tm_fill(col = "Ii",
+          style = "quantile",
+          title = "local moran statistic") 
+
+```
+
+
+```{r HH/LL}
+#memerged$x2019%>%as.vector()
+
+quadrant <- vector(mode="numeric",length=nrow(local))
+
+# centers the variable of interest around its mean
+m.me <- memerged$x2019%>%as.vector() - mean(memerged$x2019%>%as.vector())     
+
+# centers the local Moran's around the mean
+m.local <- local[,1] - mean(local[,1])    
+
+# significance threshold
+signif <- 0.05 
+
+# builds a data quadrant
+quadrant[m.me >0 & m.local>0] <- 4  
+quadrant[m.me <0 & m.local<0] <- 1      
+quadrant[m.me <0 & m.local>0] <- 2
+quadrant[m.me >0 & m.local<0] <- 3
+quadrant[local[,5]>signif] <- 0   
+
+# plot in r
+brks <- c(0,1,2,3,4)
+colors <- c("white","blue",rgb(0,0,1,alpha=0.4),rgb(1,0,0,alpha=0.4),"red")
+plot(memerged[13], border="lightgray",col=colors[findInterval(quadrant,brks,all.inside=FALSE)])
+
+legend("bottomleft", legend = c("insignificant","low-low","low-high","high-low","high-high"),
+       fill=colors,bty="n")
+
+```
+
+```{r}
+nb <- dnearneigh(st_geometry(coordsW), 0, 1500)
+nb_lw <- nb2listw(nb, style = 'B')
+
+plot(memerged$geom)
+plot(nb, st_geometry(coordsW), add=TRUE, col = 'red')
+
+
+local_g <- localG(memerged$x2019%>%as.vector(), nb_lw)
+local_g <- cbind(memerged, as.matrix(local_g))
+names(local_g)[17] <- "gstat"
+
+Suki<- rev(brewer.pal(9, "RdYlBu"))
+tm_shape(local_g) + 
+  tm_fill("gstat", 
+          palette = Suki,
+          breaks=breaks1,
+          style = "pretty") +
+  tm_borders(alpha=.4)
+
+```
+

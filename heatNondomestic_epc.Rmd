@@ -1,0 +1,141 @@
+---
+title: "nonheat"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+# tm_polygons(col=NA, alpha=0.5), maybe dont need color=NA
+library(spatstat)
+library(here)
+library(sp)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(tmap)
+library(sf)
+library(geojson)
+library(geojsonio)
+library(tmaptools)
+```
+
+```{r Load data}
+LondonBoroughs <- st_read(here::here("data", "ESRI",
+                                     "London_Borough_Excluding_MHW.shp"))
+
+library(stringr)
+Westminster <- LondonBoroughs %>%
+  dplyr::filter(., NAME=="Westminster")%>%
+  st_transform(., 27700)
+
+#have a look
+qtm(Westminster)
+
+nonheat <- st_read(here::here("data",
+                                  "nonheat.geojson")) %>%
+  st_transform(.,27700)
+summary(nonheat)
+
+##plot the EPCs on gas grid in Westminster
+##tmap_mode("view")
+tmap_mode("plot")
+## tmap mode set to plotting
+tm_shape(Westminster) +
+  tm_polygons(alpha = 0.5) +
+  tm_shape(nonheat) +
+  tm_dots(col = "#339999", size = 0.001)
+
+```
+
+```{r Data cleaning}
+#two stray blue dots right outside of London Borough boundaries
+#this data might be multiple entries, So the first, fill out the distinct
+#use a distinct function remove duplicate
+
+library(tidyverse)
+library(sf)
+#nonheat <- nonheat%>%
+#  distinct(geometry, .keep_all=TRUE)
+
+#The advantage of spatial subset thing 
+#we're retaining our original point data set 
+#basically just cookie culturing it out of the London Borough outline
+
+nonheat <- nonheat[Westminster,]
+#check to see that they've been removed
+tmap_mode("plot")
+tm_shape(Westminster) +
+  tm_polygons(alpha = 0.5) +
+  tm_shape(nonheat) +
+  tm_dots(col = "#336699", size = 0.001)
+```
+
+
+
+```{r window}
+
+#now set a window as the borough boundary use (spatstat)
+window <- as.owin(Westminster)
+plot(window)
+
+#point pattern analysis, we need to create a point pattern (ppp) object
+#first, SF tp SP
+nonheat<- nonheat %>%
+  as(., 'Spatial')
+
+nonheat$fcat <- as.factor(nonheat$MAIN_HEATING_FUEL)
+w <- as.owin(window)
+xy <- coordinates(nonheat)
+mpp <- ppp(xy[,1], xy[,2], window = w, marks=nonheat$fcat)
+
+```
+
+```{r plot}
+
+
+spp <- split(mpp)
+plot(spp[1:4], pch=4,cex=0.01, main='Main fuel description in Westminster')
+plot(density(spp[1:4]), sigma=50, main='Density of main fuel description in Westminster')
+
+
+T <- 200
+heatcolor  = add.alpha(brewer.pal(n = 9, name = "PuRd"),0.8)
+heatcolor1 = add.alpha(brewer.pal(n = 9, name = "PuBuGn"),0.8)
+heatcolor2 = add.alpha(brewer.pal(n = 9, name = "Greens"),0.8)
+heatcolor3 = add.alpha(brewer.pal(n = 9, name = "YlOrRd"),0.8)
+heatcolor4 = add.alpha(brewer.pal(n = 9, name = "GnBu"),0.8)
+
+spp[1] %>%
+  density(., sigma=T) %>%
+  plot(col= heatcolor1)
+
+spp[2] %>%
+  density(., sigma=T) %>%
+  plot(col= heatcolor2)
+
+spp[3] %>%
+  density(., sigma=T) %>%
+  plot(col= heatcolor3)
+
+spp[4] %>%
+  density(., sigma=T) %>%
+  plot(col= heatcolor4)
+
+```
+
+```{r}
+
+#spatstat.options(checksegments = FALSE)
+kDistrict <- Kest(spp$"District Heating", correction="border")%>%
+  plot()
+kElectricity <- Kest(spp$"Electricity", correction="border")%>%
+  plot()
+kGas <- Kest(spp$"Natural Gas", correction="border")%>%
+  plot()
+kOther <- Kest(spp$"Other(Oil, Biomass, LPG, etc.)", correction="border")%>%
+  plot()
+
+#kecommunity <- envelope(spp$"Community", Kest, correction="border")%>% plot()
+
+
+```
+

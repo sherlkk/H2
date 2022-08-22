@@ -1,0 +1,418 @@
+---
+title: "readshape"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(here)
+library(janitor)
+library(dplyr)
+library(tidyverse)
+library(spatstat)
+library(sp)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(tmap)
+library(sf)
+library(geojson)
+library(geojsonio)
+library(tmaptools)
+library(RColorBrewer)
+
+```
+
+```{r}
+
+westminster <- st_read(here::here("data", "lsoa_westminster.gpkg"))%>%
+  st_transform(.,27700) %>% 
+  clean_names()
+
+```
+
+```{r}
+
+gasmeters <- read_csv(here::here("data", "off_gas_2019.csv"), locale = locale(encoding = "latin1")) %>% 
+  clean_names()
+
+
+metersmerged <- westminster %>% 
+  left_join(gasmeters, 
+            by = c("lsoa11cd" = "lsoa_code")) %>%
+  dplyr::select(lsoa11cd, popden, hholds, avhholdsz, domestic_properties, gas_meters, on_percentage)
+st_crs(metersmerged)
+```
+
+```{r}
+
+plot(metersmerged$domestic_properties) # this is a numeric vector!
+plot(metersmerged["domestic_properties"])
+
+hist(metersmerged$gas_meters)
+plot(metersmerged["gas_meters"])
+     #col=brewer.pal(n = 9, name = "BuPu")
+
+hist(metersmerged$on_percentage)
+plot(metersmerged["on_percentage"])
+
+ 
+```
+
+
+```{r}
+
+metersden <- metersmerged %>%
+  #calculate area
+  mutate(area=st_area(.))%>%
+  #then density per lsoa
+  mutate(prop_density = domestic_properties/area)%>%
+  mutate(me_density = gas_meters/area)
+
+
+```
+
+
+
+```{r}
+
+hist(metersden$prop_density)
+plot(metersden["prop_density"], 
+     main = "Properties density")
+
+hist(metersden$me_density)
+plot(metersden["me_density"], 
+     main = "Gas meters density")
+
+hist(metersden$on_percentage)
+plot(metersden["on_percentage"], 
+     main = "On gas grid percentage")
+
+```
+
+```{r}
+
+tmap_mode("plot")
+tm_shape(metersden) +
+    tm_polygons("me_density",
+        style="jenks",
+        palette="BuPu",
+        midpoint=NA,
+        popup.vars=c("lsoa11cd", "me_density", "on_percentage"),
+        title="me_density")
+
+tm_shape(metersden) +
+    tm_polygons("on_percentage",
+        style="jenks",
+        palette="BuPu",
+        midpoint=NA,
+        popup.vars=c("lsoa11cd", "me_density", "on_percentage"),
+        title="on_percentage",
+        border.alpha = 0.5)
+
+on <- rev(brewer.pal(11, "PiYG"))
+tm_shape(metersden) +
+    tm_polygons("on_percentage",
+        style="jenks",
+        palette=on,
+        midpoint=NA,
+        popup.vars=c("lsoa11cd", "me_density", "on_percentage"),
+        title="on_percentage")
+
+```
+
+
+```{r red link}
+
+library(spdep)
+
+#First calculate the centroids of all Wards in London
+
+coordsW <- metersden %>%
+  st_centroid()%>%
+  st_geometry()
+  
+plot(coordsW,axes=TRUE)
+
+#create a neighbours list
+#snap = 0.0001
+L_nb <- metersden %>%
+  poly2nb(., queen=T, snap = 0.0001)
+
+summary(L_nb)
+
+#plot them
+plot(metersden$geom)
+plot(L_nb, st_geometry(coordsW), col="red", add=T)
+#add a map underneath
+
+
+L.lw <- L_nb %>%
+  nb2mat(., style="B")
+
+sum(L.lw)
+
+sum(L.lw[,1])
+
+```
+
+
+```{r many links}
+
+overlapmat = st_overlaps(metersden,sparse=FALSE)
+ovnb = mat2listw(overlapmat)
+
+L_nb_rock <- metersden %>%
+  poly2nb(., queen=F, snap = 0.0001)
+
+plot(metersden$geom)
+plot(L_nb, st_geometry(coordsW), col="red", add=T)
+plot(L_nb_rock, st_geometry(coordsW), col="blue", add=T)
+#plot(metersden$geom)
+plot(ovnb, st_geometry(coordsW), col="green", add=T)
+#add a map underneath
+
+```
+
+
+
+```{r}
+
+L.lw <- L_nb %>%
+  nb2listw(., style="C")
+
+I_Global_onPercentage <- metersden %>%
+  pull(on_percentage) %>%
+  as.vector()%>%
+  moran.test(., L.lw)
+
+I_Global_onPercentage
+
+C_Global_onPercentage <- 
+  metersden %>%
+  pull(on_percentage) %>%
+  as.vector()%>%
+  geary.test(., L.lw)
+
+C_Global_onPercentage
+
+G_Global_onPercentage <- 
+  metersden %>%
+  pull(on_percentage) %>%
+  as.vector()%>%
+  globalG.test(., L.lw)
+
+G_Global_onPercentage
+
+```
+
+```{r}
+
+I_Global_meDensity <- metersden %>%
+  pull(me_density) %>%
+  as.vector()%>%
+  moran.test(., L.lw)
+
+I_Global_meDensity
+
+C_Global_meDensity <- 
+  metersden %>%
+  pull(me_density) %>%
+  as.vector()%>%
+  geary.test(., L.lw)
+
+C_Global_meDensity
+
+G_Global_meDensity <- 
+  metersden %>%
+  pull(me_density) %>%
+  as.vector()%>%
+  globalG.test(., L.lw)
+
+G_Global_meDensity
+
+```
+
+```{r}
+
+moran <- moran.plot(metersden$on_percentage%>%
+  as.vector(), listw = nb2listw(L_nb, style="W"))
+
+```
+
+
+```{r meters count/meters density}
+
+#use the localmoran function to generate I for each ward in the city
+
+I_Local_meDensity <- metersden %>%
+  pull(me_density) %>%
+  as.vector()%>%
+  localmoran(., L.lw)%>%
+  as_tibble()
+
+I_Local_onPercentage <- metersden %>%
+  pull(on_percentage) %>%
+  as.vector()%>%
+  localmoran(., L.lw)%>%
+  as_tibble()
+
+#what does the output (the localMoran object) look like?
+slice_head(I_Local_meDensity, n=5)
+
+metersden <- metersden %>%
+  mutate(meDensity_I =as.numeric(I_Local_meDensity$Ii))%>%
+  mutate(meDensity_Iz =as.numeric(I_Local_meDensity$Z.Ii))%>%
+  mutate(onPercentage_I =as.numeric(I_Local_onPercentage$Ii))%>%
+  mutate(onPercentage_Iz =as.numeric(I_Local_onPercentage$Z.Ii))
+
+```
+
+```{r plot meters count I/Iz}
+
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+
+MoranColours<- rev(brewer.pal(8, "PRGn"))
+
+tm_shape(metersden) +
+    tm_polygons("onPercentage_I",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's I, Gas consumption density")
+
+tm_shape(metersden) +
+    tm_polygons("onPercentage_Iz",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's Iz, Gas consumption density")
+
+```
+
+```{r Gi meters/consumption}
+
+Gi_Local_meDensity <- metersden %>%
+  pull(me_density) %>%
+  as.vector()%>%
+  localG(., L.lw)
+
+head(Gi_Local_meDensity)
+
+metersden <- metersden %>%
+  mutate(meDensity_G = as.numeric(Gi_Local_meDensity))
+
+GIColours<- rev(brewer.pal(8, "PiYG"))
+
+#now plot on an interactive map
+tm_shape(metersden) +
+    tm_polygons("meDensity_G",
+        style="fixed",
+        breaks=breaks1,
+        palette=GIColours,
+        midpoint=NA,
+        title="Gi*, Gas meters density in London")
+
+
+Gi_Local_onPercentage <- metersden %>%
+  pull(on_percentage) %>%
+  as.vector()%>%
+  localG(., L.lw)
+
+head(Gi_Local_onPercentage)
+
+metersden <- metersden %>%
+  mutate(onPercentage_G = as.numeric(Gi_Local_onPercentage))
+
+GIColours0<- rev(brewer.pal(10, "RdBu"))
+#now plot on an interactive map
+tm_shape(metersden) +
+    tm_polygons("onPercentage_G",
+        style="fixed",
+        breaks=breaks1,
+        palette=GIColours0,
+        midpoint=NA,
+        title="Gi*, Gas consumption density in London")
+
+```
+
+```{r orange and green}
+
+local <- localmoran(x = metersden$on_percentage%>%
+  as.vector(), listw = nb2listw(L_nb, style="W"))
+
+L.lww <- L_nb %>%
+  nb2listw(., style="W")
+
+I_Local_conDen <- metersden %>%
+     pull(on_percentage) %>%
+     as.vector()%>%
+     localmoran(., L.lww)%>%
+     as_tibble()
+
+
+# binds results to our polygon shapefile
+moran.map <- cbind(metersden, local)
+
+tm_shape(moran.map) +
+  tm_fill(col = "Ii",
+          style = "quantile",
+          title = "local moran statistic") 
+
+```
+```{r HH/LL}
+#metersden$on_percentage%>%as.vector()
+
+quadrant <- vector(mode="numeric",length=nrow(local))
+
+# centers the variable of interest around its mean
+m.con <- metersden$on_percentage%>%as.vector() - mean(metersden$on_percentage%>%as.vector())     
+
+# centers the local Moran's around the mean
+m.local <- local[,1] - mean(local[,1])    
+
+# significance threshold
+signif <- 0.05 
+
+# builds a data quadrant
+quadrant[m.con >0 & m.local>0] <- 4  
+quadrant[m.con <0 & m.local<0] <- 1      
+quadrant[m.con <0 & m.local>0] <- 2
+quadrant[m.con >0 & m.local<0] <- 3
+quadrant[local[,5]>signif] <- 0   
+
+# plot in r
+brks <- c(0,1,2,3,4)
+colors <- c("white","blue",rgb(0,0,1,alpha=0.4),rgb(1,0,0,alpha=0.4),"red")
+plot(metersden[13], border="lightgray",col=colors[findInterval(quadrant,brks,all.inside=FALSE)])
+
+legend("bottomleft", legend = c("insignificant","low-low","low-high","high-low","high-high"),
+       fill=colors,bty="n")
+
+```
+
+```{r}
+nb <- dnearneigh(st_geometry(coordsW), 0, 800)
+nb_lw <- nb2listw(nb, style = 'B')
+
+plot(metersden$geom)
+plot(nb, st_geometry(coordsW), add=TRUE, col = 'red')
+
+
+local_g <- localG(metersden$on_percentage%>%as.vector(), nb_lw)
+local_g <- cbind(metersden, as.matrix(local_g))
+names(local_g)[17] <- "gstat"
+
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+Suki<- rev(brewer.pal(9, "RdYlBu"))
+tm_shape(local_g) + 
+  tm_fill("gstat", 
+          palette = Suki,
+          breaks=breaks1,
+          style = "pretty") +
+  tm_borders(alpha=.4)
+
+```
+
